@@ -1,0 +1,5 @@
+{
+  "name": "Performance Review Analyzer",
+  "description": "An application to analyze corporate performance review PDF documents. It extracts key information like objectives, achievements, strengths, and areas for improvement, then structures it into a clean JSON format.",
+  "requestFramePermissions": []
+}

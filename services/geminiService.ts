@@ -12,6 +12,37 @@ if (!apiKey) {
 
 const ai = new GoogleGenAI({ apiKey });
 
+/**
+ * A robust retry mechanism with exponential backoff for Gemini API calls.
+ * @param apiCall The function that makes the actual API call.
+ * @param maxRetries The maximum number of times to retry.
+ * @returns The result of the API call.
+ */
+async function withRetry<T>(apiCall: () => Promise<T>, maxRetries = 3): Promise<T> {
+    let lastError: any;
+    for (let i = 0; i < maxRetries; i++) {
+        try {
+            return await apiCall();
+        } catch (error: any) {
+            lastError = error;
+            // Check specifically for transient, retryable errors.
+            if (error.message && (error.message.includes('503') || error.message.toLowerCase().includes('overloaded'))) {
+                if (i < maxRetries - 1) { // Don't wait on the last attempt
+                    const delay = Math.pow(2, i) * 1000 + Math.random() * 1000; // 1s, 2s, 4s... + jitter
+                    console.log(`Model overloaded. Retrying in ${Math.round(delay / 1000)}s... (Attempt ${i + 1}/${maxRetries})`);
+                    await new Promise(resolve => setTimeout(resolve, delay));
+                }
+            } else {
+                // Not a retryable error (e.g., bad request, auth error), so fail immediately.
+                throw error;
+            }
+        }
+    }
+    // If all retries fail, throw the last captured error.
+    console.error("All retries failed. Throwing last known error.", lastError);
+    throw lastError;
+}
+
 
 // --- Logic for Performance Review Analysis ---
 
@@ -118,22 +149,24 @@ const analysisResponseSchema = {
 
 export const analyzePerformanceReview = async (pdfText: string, userData: UserData): Promise<EvaluationResult> => {
     try {
-        const prompt = buildAnalysisPrompt(pdfText, userData);
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: analysisResponseSchema,
-            },
+        const result = await withRetry(async () => {
+            const prompt = buildAnalysisPrompt(pdfText, userData);
+            const response = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: analysisResponseSchema,
+                },
+            });
+            
+            const jsonText = response.text;
+            if (!jsonText) {
+                 throw new Error("La respuesta de la API de IA estaba vacía.");
+            }
+            
+            return JSON.parse(jsonText) as EvaluationResult;
         });
-        
-        const jsonText = response.text;
-        if (!jsonText) {
-             throw new Error("La respuesta de la API de IA estaba vacía.");
-        }
-        
-        const result = JSON.parse(jsonText) as EvaluationResult;
         
         result.colaborador = userData.name;
         result.area = userData.area;
@@ -179,17 +212,19 @@ export const generateSmartGoals = async (oportunidades: string[]): Promise<Smart
     };
 
     try {
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: responseSchema,
-            },
+        return await withRetry(async () => {
+            const response = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: responseSchema,
+                },
+            });
+            const jsonText = response.text;
+            if (!jsonText) throw new Error("La respuesta de la API de IA estaba vacía.");
+            return JSON.parse(jsonText);
         });
-        const jsonText = response.text;
-        if (!jsonText) throw new Error("La respuesta de la API de IA estaba vacía.");
-        return JSON.parse(jsonText);
     } catch (error: any) {
         console.error("Error in generateSmartGoals:", error);
         throw new Error(`Falló la generación de objetivos SMART: ${error.message}`);
@@ -242,17 +277,19 @@ export const generateDevelopmentPlan = async (oportunidades: string[], puesto: s
     };
 
     try {
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: responseSchema,
-            },
+        return await withRetry(async () => {
+            const response = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: responseSchema,
+                },
+            });
+            const jsonText = response.text;
+            if (!jsonText) throw new Error("La respuesta de la API de IA estaba vacía.");
+            return JSON.parse(jsonText);
         });
-        const jsonText = response.text;
-        if (!jsonText) throw new Error("La respuesta de la API de IA estaba vacía.");
-        return JSON.parse(jsonText);
     } catch (error: any) {
         console.error("Error in generateDevelopmentPlan:", error);
         throw new Error(`Falló la generación del plan de desarrollo: ${error.message}`);
@@ -297,17 +334,19 @@ export const analyzeTeamPerformance = async (analyses: EvaluationResult[]): Prom
     };
 
     try {
-        const response = await ai.models.generateContent({
-            model: "gemini-2.5-flash",
-            contents: prompt,
-            config: {
-                responseMimeType: "application/json",
-                responseSchema: responseSchema,
-            },
+        return await withRetry(async () => {
+            const response = await ai.models.generateContent({
+                model: "gemini-2.5-flash",
+                contents: prompt,
+                config: {
+                    responseMimeType: "application/json",
+                    responseSchema: responseSchema,
+                },
+            });
+            const jsonText = response.text;
+            if (!jsonText) throw new Error("La respuesta de la API de IA estaba vacía.");
+            return JSON.parse(jsonText);
         });
-        const jsonText = response.text;
-        if (!jsonText) throw new Error("La respuesta de la API de IA estaba vacía.");
-        return JSON.parse(jsonText);
     } catch (error: any) {
         console.error("Error in analyzeTeamPerformance:", error);
         throw new Error(`Falló el análisis de equipo: ${error.message}`);
@@ -320,6 +359,8 @@ export const sendChatMessage = async (
     analysisResult: EvaluationResult,
     messages: ChatMessage[]
 ): Promise<AsyncIterable<GenerateContentResponse>> => {
+    // Note: A simple retry mechanism is not suitable for streaming responses.
+    // The user can manually retry sending the message if it fails.
     const analysisContext = { ...analysisResult };
     delete analysisContext.raw_text;
 
