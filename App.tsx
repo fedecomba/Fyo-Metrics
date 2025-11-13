@@ -63,7 +63,7 @@ const App: React.FC = () => {
     } catch (err) {
       console.error(err);
       const errorMessage = err instanceof Error ? err.message : "Ocurrió un error desconocido durante el análisis.";
-      setError(`Error: ${errorMessage}`);
+      setError(errorMessage); // Show the full error message from the service
     } finally {
       setIsLoading(false);
     }

@@ -56,31 +56,25 @@ export const ChatbotModal: React.FC<ChatbotModalProps> = ({ isOpen, onClose, ana
             const stream = await sendChatMessage(analysisResult, updatedMessages);
             
             setMessages(prev => [...prev, { role: 'model', content: '' }]);
-
-            const reader = stream.getReader();
-            const decoder = new TextDecoder();
-            let done = false;
-
-            while (!done) {
-                const { value, done: doneReading } = await reader.read();
-                done = doneReading;
-                const chunkValue = decoder.decode(value, { stream: true });
+            
+            for await (const chunk of stream) {
+                const chunkValue = chunk.text;
                 
                 setMessages(prev => {
-                    const lastMessage = prev[prev.length - 1];
+                    // Create a new array to trigger re-render
+                    const newMessages = [...prev]; 
+                    const lastMessage = newMessages[newMessages.length - 1];
                     if (lastMessage && lastMessage.role === 'model') {
-                        const newMessages = JSON.parse(JSON.stringify(prev)); // Deep copy
-                        newMessages[prev.length - 1].content += chunkValue;
-                        return newMessages;
+                        lastMessage.content += chunkValue;
                     }
-                    return prev;
+                    return newMessages;
                 });
             }
 
         } catch (e) {
             const errorMessage = e instanceof Error ? e.message : 'Ocurrió un error al obtener la respuesta.';
             setError(errorMessage);
-            // Don't remove the user message on error, so they can retry or copy it.
+            setMessages(prev => [...prev, {role: 'model', content: `Lo siento, ocurrió un error: ${errorMessage}`}]);
         } finally {
             setIsLoading(false);
         }
@@ -152,7 +146,7 @@ export const ChatbotModal: React.FC<ChatbotModalProps> = ({ isOpen, onClose, ana
                             </div>
                          </div>
                     )}
-                    {error && (
+                    {error && !isLoading && (
                         <div className="text-center text-red-600 bg-red-50 p-3 rounded-lg text-sm">
                             <p><strong>Error:</strong> {error}</p>
                         </div>
